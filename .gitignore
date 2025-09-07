@@ -50,6 +50,9 @@ data/
 *.gz
 *.tar
 *.log
+*.docx
+*.pptx
+*.xlsx
 
 # --- Bioinformatics project-specific (optional) ---
 *.h5ad
