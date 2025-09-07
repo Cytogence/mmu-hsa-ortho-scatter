@@ -1,7 +1,54 @@
+# --- OS junk ---
 .DS_Store
-.csv
-.png
-.pdf
-.zip
-.txt
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+~$*               # temp Office files
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
 .mypy_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+.env
+.env.*
+
+# --- R (you use it sometimes) ---
+.Rhistory
+.RData
+.Rproj.user/
+
+# --- Node/Front-end (you do React/Vite) ---
+node_modules/
+dist/
+build/
+
+# --- IDEs ---
+.vscode/
+.idea/
+
+# --- Data / outputs (tune as needed) ---
+*.csv
+*.tsv
+*.xlsx
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.zip
+*.gz
+*.tar
+*.log
+
+# --- Bioinformatics project-specific (optional) ---
+*.h5ad
+*.rds
+*.rdata
