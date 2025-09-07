@@ -163,6 +163,40 @@ def fetch_orthologs_human_to_mouse(human_symbols, max_retries=10):
     
     return df
 
+def identify_genes_to_label(sig, x, y, n_labels=8):
+    """
+    Identify interesting genes to label based on extreme values and distances
+    """
+    try:
+        # Calculate distances from origin
+        distances = np.sqrt(x**2 + y**2)
+        
+        # Get indices of most extreme points
+        extreme_indices = set()
+        
+        # Top and bottom in each dimension
+        n_per_direction = max(1, n_labels // 4)
+        
+        # Highest/lowest x values
+        extreme_indices.update(np.argsort(x)[-n_per_direction:])  # Highest x
+        extreme_indices.update(np.argsort(x)[:n_per_direction])   # Lowest x
+        
+        # Highest/lowest y values  
+        extreme_indices.update(np.argsort(y)[-n_per_direction:])  # Highest y
+        extreme_indices.update(np.argsort(y)[:n_per_direction])   # Lowest y
+        
+        # Also add points with largest distance from origin
+        extreme_indices.update(np.argsort(distances)[-n_per_direction:])
+        
+        # Convert to list and limit to n_labels
+        label_indices = list(extreme_indices)[:n_labels]
+        
+        return label_indices
+        
+    except Exception as e:
+        print(f"[warn] Could not identify genes to label: {e}", file=sys.stderr)
+        return None
+
 def ensure_dir(path):
     d = os.path.dirname(os.path.abspath(path))
     if d and not os.path.exists(d):
@@ -240,41 +274,86 @@ def main():
     x = sig["log2FC_mouse"].astype(float).to_numpy()
     y = sig["log2FC_human"].astype(float).to_numpy()
 
-    # Pearson r
+    # Calculate statistics
     if len(x) >= 2:
         r = np.corrcoef(x, y)[0, 1]
     else:
         r = np.nan
 
-    # Fit line
+    # Fit regression line
     try:
         slope, intercept = np.polyfit(x, y, 1)
     except Exception:
         slope, intercept = np.nan, np.nan
 
-    # Plot
+    # Create enhanced plot
     ensure_dir(args.out_plot)
-    plt.figure(figsize=(6,6), dpi=150)
-    plt.scatter(x, y, s=12, alpha=0.6)
-    # Axes lines
-    plt.axhline(0, ls="--", lw=0.7)
-    plt.axvline(0, ls="--", lw=0.7)
-    # Regression line
+    fig, ax = plt.subplots(figsize=(8, 7), dpi=150)
+    
+    # Create scatter plot with better styling
+    ax.scatter(x, y, s=20, alpha=0.7, c='steelblue', edgecolors='white', linewidth=0.5)
+    
+    # Add reference lines
+    ax.axhline(0, color='gray', linestyle='--', linewidth=0.8, alpha=0.7)
+    ax.axvline(0, color='gray', linestyle='--', linewidth=0.8, alpha=0.7)
+    
+    # Add regression line if valid
     if not np.isnan(slope):
-        xr = np.linspace(x.min(), x.max(), 200)
-        plt.plot(xr, slope * xr + intercept, lw=1.2)
-        subtitle = f"Linear fit: y = {slope:.2f}x + {intercept:.2f}   |   Pearson r = {r:.2f}"
-    else:
-        subtitle = f"Pearson r = {r:.2f}" if not np.isnan(r) else "Pearson r = NA"
-
-    plt.title("Human vs Mouse log2FC (significant genes)")
-    plt.suptitle(subtitle, y=0.93, fontsize=9)
-    plt.xlabel("Mouse log2FoldChange")
-    plt.ylabel("Human log2FoldChange")
+        x_range = np.linspace(x.min(), x.max(), 100)
+        y_pred = slope * x_range + intercept
+        ax.plot(x_range, y_pred, color='red', linewidth=2, alpha=0.8)
+    
+    # Set labels and title with proper spacing
+    ax.set_xlabel('Mouse log₂ Fold Change', fontweight='bold', fontsize=11)
+    ax.set_ylabel('Human log₂ Fold Change', fontweight='bold', fontsize=11)
+    ax.set_title('Cross-Species Differential Expression Correlation', 
+                fontweight='bold', fontsize=12, pad=20)
+    
+    # Add statistics box in upper left corner
+    stats_text = []
+    if not np.isnan(r):
+        stats_text.append(f'Pearson r = {r:.3f}')
+        stats_text.append(f'R² = {r**2:.3f}')
+    if not np.isnan(slope):
+        stats_text.append(f'Slope = {slope:.3f}')
+    stats_text.append(f'n = {len(sig)} genes')
+    
+    stats_str = '\n'.join(stats_text)
+    ax.text(0.05, 0.95, stats_str, transform=ax.transAxes, fontsize=10,
+            verticalalignment='top', bbox=dict(boxstyle='round,pad=0.5', 
+            facecolor='white', alpha=0.8, edgecolor='gray'))
+    
+    # Add gene labels for extreme points (8 most interesting genes)
+    label_genes = identify_genes_to_label(sig, x, y, n_labels=12)
+    
+    if label_genes is not None:
+        for idx in label_genes:
+            gene_human = sig.iloc[idx]['gene_human']
+            gene_mouse = sig.iloc[idx]['gene_mouse']
+            
+            # Use human gene name as primary, mouse as secondary
+            if pd.notna(gene_human) and str(gene_human).strip():
+                label = str(gene_human)
+            elif pd.notna(gene_mouse) and str(gene_mouse).strip():
+                label = str(gene_mouse)
+            else:
+                continue
+                
+            ax.annotate(label, (x[idx], y[idx]), 
+                       xytext=(5, 5), textcoords='offset points',
+                       fontsize=8, ha='left', va='bottom',
+                       bbox=dict(boxstyle='round,pad=0.2', facecolor='yellow', alpha=0.7),
+                       arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+    
+    # Improve grid and layout
+    ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
     plt.tight_layout()
-    plt.savefig(args.out_plot)
+    
+    # Save plot
+    plt.savefig(args.out_plot, bbox_inches='tight', facecolor='white', dpi=150)
     plt.close()
-    print(f"[ok] Wrote scatter: {args.out_plot}  (n points={len(sig)})", file=sys.stderr)
+    
+    print(f"[ok] Wrote enhanced scatter: {args.out_plot}  (n points={len(sig)})", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
