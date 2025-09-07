@@ -7,7 +7,7 @@ Quick README for `combine_ortholog_scatter.py`. This script pairs **human** and 
 ## What it does
 
 * Reads **two CSVs** (human & mouse).
-* Ensures each has: **first column = gene symbol**, plus **`log2FoldChange`** and **`padj`** columns (order doesn’t matter).
+* Ensures each has: **first column = gene symbol**, plus **`log2FoldChange`** and **`padj`** columns (order doesn't matter).
 * Builds a **1:1 human→mouse** ortholog map via Ensembl BioMart *(or uses your own precomputed ortholog file).*
 * Outputs a CSV with exactly these columns:
 
@@ -25,7 +25,7 @@ Quick README for `combine_ortholog_scatter.py`. This script pairs **human** and 
 pip install pandas requests matplotlib numpy
 ```
 
-> **Note:** Online ortholog fetching requires outbound HTTPS to Ensembl BioMart. If your environment is offline, generate an ortholog CSV first (see below) and pass it via `--orthologs`.
+> **Note:** Online ortholog fetching requires outbound HTTPS to Ensembl BioMart. If your environment is offline or BioMart is down, use the precomputed ortholog option (see below).
 
 ---
 
@@ -55,7 +55,26 @@ This will:
 
 ---
 
-## Using a precomputed ortholog map (no network)
+## Using precomputed orthologs (recommended for reliability)
+
+### Option 1: Auto-download Allen Institute orthologs
+
+Use the included `prepare_orthologs.py` script to automatically download high-quality ortholog mappings:
+
+```bash
+# Download and prepare ortholog file
+python prepare_orthologs.py
+
+# Then run your analysis
+python combine_ortholog_scatter.py \
+  --human path/to/human.csv \
+  --mouse path/to/mouse.csv \
+  --orthologs human_mouse_orthologs.csv \
+  --out-csv output/paired_mouse_human.csv \
+  --out-plot output/mouse_human_scatter.png
+```
+
+### Option 2: Manual ortholog file
 
 ```bash
 python combine_ortholog_scatter.py \
@@ -120,7 +139,26 @@ KRT8,Krt8
 
 * **"No ortholog pairs found"**: Symbol mismatches or aliases. Consider passing a vetted ortholog CSV.
 * **Empty plot (no points)**: Tight significance filter; relax with `--sig-mode any` or larger `--padj-threshold`.
-* **BioMart errors/timeouts**: Use `--orthologs` to bypass network or retry later.
+* **BioMart errors/timeouts**: Use `--orthologs` to bypass network issues or retry later. The improved script now tries multiple BioMart mirrors and has better error handling.
+* **BioMart server errors**: If you see "Can't locate object method setIncluded" errors, BioMart is experiencing server-side issues. Use the precomputed ortholog option instead.
+
+---
+
+## Ortholog data sources
+
+The script supports multiple ortholog sources:
+
+1. **Ensembl BioMart** (default): Queries live BioMart API for 1:1 orthologs
+2. **Allen Institute GeneOrthology** (recommended): High-quality NCBI-based ortholog mappings
+
+When using the `prepare_orthologs.py` helper script, ortholog data comes from:
+
+> **Allen Institute GeneOrthology** (2023). *CSV file and R package for collecting gene ortholog information from NCBI*. 
+> Dataset: mouse_human_marmoset_macaque_orthologs_20231113.csv  
+> GitHub: https://github.com/AllenInstitute/GeneOrthology  
+> Based on NCBI Gene orthology table (https://ftp.ncbi.nlm.nih.gov/gene/DATA/gene_orthologs.gz)
+
+The Allen Institute dataset provides comprehensive human-mouse ortholog mappings derived from NCBI's daily-updated gene orthology database, with additional validation and standardization.
 
 ---
 
@@ -128,14 +166,16 @@ KRT8,Krt8
 
 * Commit the exact inputs and the produced `paired_mouse_human.csv` alongside the figure for full provenance.
 * Record the CLI you used (copy from your shell history) in your analysis notes.
+* If using `prepare_orthologs.py`, note the download date of the ortholog file for reproducibility.
 
 ---
 
-## Optional: building an ortholog CSV
+## Optional: building a custom ortholog CSV
 
-If you don’t want the script to call BioMart, you can pre‑generate a strict 1:1 map (columns `gene_human,gene_mouse`) using your preferred pipeline or an external helper. Then use `--orthologs path/to/orthologs_1to1.csv`.
+If you don't want the script to call BioMart or use the Allen Institute data, you can pre‑generate a strict 1:1 map (columns `gene_human,gene_mouse`) using your preferred pipeline or an external helper. Then use `--orthologs path/to/orthologs_1to1.csv`.
 
----
-
-**Questions or tweaks?** Add labeling, facets, or alternative fits (e.g., robust regression) directly in the script as needed.
-
+Alternative ortholog sources include:
+- **HGNC Comparison of Orthology Predictions (HCOP)**: https://www.genenames.org/tools/hcop/
+- **MGI Vertebrate Homology**: https://www.informatics.jax.org/homology.shtml
+- **OrthoDB**: https://www.orthodb.org/
+- **NCBI HomoloGene**: https://www.ncbi.nlm.nih.gov/homologene
