@@ -274,6 +274,9 @@ def main():
     x = sig["log2FC_mouse"].astype(float).to_numpy()
     y = sig["log2FC_human"].astype(float).to_numpy()
 
+    concordant_mask = (x > 0) & (y > 0) | (x < 0) & (y < 0)  # Same direction
+    discordant_mask = (x > 0) & (y < 0) | (x < 0) & (y > 0)  # Opposite direction
+
     # Calculate statistics
     if len(x) >= 2:
         r = np.corrcoef(x, y)[0, 1]
@@ -291,7 +294,10 @@ def main():
     fig, ax = plt.subplots(figsize=(8, 7), dpi=150)
     
     # Create scatter plot with better styling
-    ax.scatter(x, y, s=20, alpha=0.7, c='steelblue', edgecolors='white', linewidth=0.5)
+    ax.scatter(x[concordant_mask], y[concordant_mask], s=20, alpha=0.7, 
+           c='lightgreen', edgecolors='white', linewidth=0.5, label='Concordant')
+    ax.scatter(x[discordant_mask], y[discordant_mask], s=20, alpha=0.7, 
+            c='lightcoral', edgecolors='white', linewidth=0.5, label='Discordant')
     
     # Add reference lines
     ax.axhline(0, color='gray', linestyle='--', linewidth=0.8, alpha=0.7)
@@ -324,7 +330,7 @@ def main():
             facecolor='white', alpha=0.8, edgecolor='gray'))
     
     # Add gene labels for extreme points (8 most interesting genes)
-    label_genes = identify_genes_to_label(sig, x, y, n_labels=12)
+    label_genes = identify_genes_to_label(sig, x, y, n_labels=20)
     
     if label_genes is not None:
         for idx in label_genes:
@@ -344,6 +350,16 @@ def main():
                        fontsize=8, ha='left', va='bottom',
                        bbox=dict(boxstyle='round,pad=0.2', facecolor='yellow', alpha=0.7),
                        arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+    
+    # Add legend for gene label types
+    from matplotlib.patches import Rectangle
+    legend_elements = [
+        Rectangle((0,0),1,1, facecolor='lightgreen', alpha=0.8, edgecolor='darkgreen', 
+                 label='Concordant genes (similar response)'),
+        Rectangle((0,0),1,1, facecolor='yellow', alpha=0.8, edgecolor='orange',
+                 label='Extreme genes (strongest responses)')
+    ]
+    ax.legend(handles=legend_elements, loc='lower right', fontsize=9, framealpha=0.9)
     
     # Improve grid and layout
     ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
