@@ -22,6 +22,13 @@ import requests
 import matplotlib.pyplot as plt
 
 BIOMART_URL = "https://www.ensembl.org/biomart/martservice"
+# Alternative BioMart URLs to try if main one fails
+BIOMART_MIRRORS = [
+    "https://www.ensembl.org/biomart/martservice",
+    "https://uswest.ensembl.org/biomart/martservice",
+    "https://useast.ensembl.org/biomart/martservice",
+    "https://asia.ensembl.org/biomart/martservice"
+]
 
 def read_deg_csv(path, species_label):
     df = pd.read_csv(path)
@@ -50,7 +57,7 @@ def chunked(iterable, n):
     if chunk:
         yield chunk
 
-def fetch_orthologs_human_to_mouse(human_symbols):
+def fetch_orthologs_human_to_mouse(human_symbols, max_retries=10):
     """
     Query Ensembl BioMart for human->mouse one2one orthologs.
     Returns DataFrame with columns: gene_human, gene_mouse
@@ -63,8 +70,13 @@ def fetch_orthologs_human_to_mouse(human_symbols):
         "mmusculus_homolog_associated_gene_name",
         "mmusculus_homolog_orthology_type",
     ]
+    
     frames = []
-    for batch in chunked(sorted(set(human_symbols)), 300):
+    total_batches = len(list(chunked(sorted(set(human_symbols)), 300)))
+    
+    for batch_num, batch in enumerate(chunked(sorted(set(human_symbols)), 300), 1):
+        print(f"[info] Processing batch {batch_num}/{total_batches} ({len(batch)} genes)...", file=sys.stderr)
+        
         values_xml = "".join(f"<Value>{html.escape(s)}</Value>" for s in batch)
         xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE Query>
@@ -75,25 +87,60 @@ def fetch_orthologs_human_to_mouse(human_symbols):
     {"".join(f'<Attribute name="{a}"/>' for a in attrs)}
   </Dataset>
 </Query>"""
-        # Robust POST with simple retry
-        for attempt in range(6):
-            try:
-                r = requests.post(BIOMART_URL, data={"query": xml}, timeout=60)
-                if r.status_code == 200 and r.text and not r.text.startswith("Query ERROR"):
-                    tmp = pd.read_csv(io.StringIO(r.text), sep="\t")
-                    frames.append(tmp)
-                    break
-                else:
-                    raise RuntimeError(f"BioMart bad response (HTTP {r.status_code}): {r.text[:200]}")
-            except Exception as e:
-                if attempt == 5:
-                    raise
-                time.sleep(min(2**attempt, 30))
+        
+        # Try multiple mirrors and retry logic
+        batch_success = False
+        for mirror in BIOMART_MIRRORS:
+            if batch_success:
+                break
+                
+            for attempt in range(max_retries):
+                try:
+                    print(f"[info] Trying {mirror} (attempt {attempt + 1})...", file=sys.stderr)
+                    
+                    r = requests.post(mirror, data={"query": xml}, timeout=120)
+                    
+                    if r.status_code == 200 and r.text and not any(error in r.text.lower() for error in 
+                        ["query error", "error:", "exception", "can't locate", "biomart::exception"]):
+                        
+                        # Check if we got actual data
+                        lines = r.text.strip().split('\n')
+                        if len(lines) > 1:  # More than just header
+                            tmp = pd.read_csv(io.StringIO(r.text), sep="\t")
+                            if not tmp.empty:
+                                frames.append(tmp)
+                                batch_success = True
+                                print(f"[info] Batch {batch_num} successful with {len(tmp)} results", file=sys.stderr)
+                                break
+                    
+                    # If we get here, the response wasn't good
+                    if "Query ERROR" in r.text or "Exception" in r.text:
+                        print(f"[warn] BioMart server error: {r.text[:200]}", file=sys.stderr)
+                    else:
+                        print(f"[warn] Unexpected response (HTTP {r.status_code}): {r.text[:100]}", file=sys.stderr)
+                        
+                except requests.exceptions.RequestException as e:
+                    print(f"[warn] Network error on attempt {attempt + 1}: {e}", file=sys.stderr)
+                except Exception as e:
+                    print(f"[warn] Unexpected error on attempt {attempt + 1}: {e}", file=sys.stderr)
+                
+                if attempt < max_retries - 1:
+                    wait_time = min(2 ** attempt, 60)  # Exponential backoff up to 60 seconds
+                    print(f"[info] Waiting {wait_time} seconds before retry...", file=sys.stderr)
+                    time.sleep(wait_time)
+        
+        if not batch_success:
+            print(f"[error] Failed to fetch batch {batch_num} after trying all mirrors", file=sys.stderr)
+            # Continue with other batches rather than failing completely
 
     if not frames:
+        print("[error] No batches were successful. BioMart may be down.", file=sys.stderr)
+        print("[error] Please try again later or provide a pre-computed ortholog file using --orthologs", file=sys.stderr)
         return pd.DataFrame(columns=["gene_human","gene_mouse"])
 
     raw = pd.concat(frames, ignore_index=True)
+    print(f"[info] Retrieved {len(raw)} ortholog records from BioMart", file=sys.stderr)
+    
     # Ensure expected columns exist
     for c in ["external_gene_name", "mmusculus_homolog_associated_gene_name", "mmusculus_homolog_orthology_type"]:
         if c not in raw.columns:
@@ -106,10 +153,14 @@ def fetch_orthologs_human_to_mouse(human_symbols):
 
     df.columns = ["gene_human", "gene_mouse"]
     df = df.dropna().drop_duplicates()
+    print(f"[info] Found {len(df)} one-to-one orthologs", file=sys.stderr)
+    
     # Enforce strict 1:1 uniqueness on symbols
     dup_h = df["gene_human"].duplicated(keep=False)
     dup_m = df["gene_mouse"].duplicated(keep=False)
     df = df[~dup_h & ~dup_m].reset_index(drop=True)
+    print(f"[info] After removing duplicates: {len(df)} unique 1:1 orthologs", file=sys.stderr)
+    
     return df
 
 def ensure_dir(path):
@@ -132,9 +183,11 @@ def main():
     # Read DE tables
     human = read_deg_csv(args.human, "human")
     mouse = read_deg_csv(args.mouse, "mouse")
+    print(f"[info] Loaded {len(human)} human genes, {len(mouse)} mouse genes", file=sys.stderr)
 
     # Build or read ortholog table
     if args.orthologs:
+        print(f"[info] Using pre-computed ortholog file: {args.orthologs}", file=sys.stderr)
         ortho = pd.read_csv(args.orthologs)
         if not {"gene_human","gene_mouse"}.issubset(ortho.columns):
             raise ValueError("orthologs CSV must contain columns: gene_human,gene_mouse")
@@ -146,6 +199,8 @@ def main():
     if ortho.empty:
         raise RuntimeError("No ortholog pairs found. Check gene symbols or provide --orthologs.")
 
+    print(f"[info] Using {len(ortho)} ortholog pairs for matching", file=sys.stderr)
+
     # Merge: keep genes present in both DE tables and in the ortholog map
     merged = (ortho
               .merge(human.rename(columns={"gene":"gene_human","log2FC":"log2FC_human","padj":"padj_human"}),
@@ -155,6 +210,8 @@ def main():
 
     if merged.empty:
         raise RuntimeError("No overlapping orthologs between your human and mouse DE tables after merge.")
+
+    print(f"[info] Successfully matched {len(merged)} ortholog pairs between datasets", file=sys.stderr)
 
     # Write the paired CSV in your requested column order
     out_cols = ["gene_mouse","gene_human","log2FC_mouse","log2FC_human","padj_mouse","padj_human"]
@@ -178,6 +235,8 @@ def main():
         print("[warn] No points passed significance filter for plotting; skipping plot.", file=sys.stderr)
         return
 
+    print(f"[info] Plotting {len(sig)} significant genes", file=sys.stderr)
+    
     x = sig["log2FC_mouse"].astype(float).to_numpy()
     y = sig["log2FC_human"].astype(float).to_numpy()
 
@@ -219,4 +278,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
